@@ -1,11 +1,10 @@
+import 'regenerator-runtime/runtime'
 import './App.css'
-// import VoiceActivatedSearch from './components/VoiceActivatedSearch.tsx'
-// import VoiceActivatedSearchAlt from './components/VoiceActivatedSearchAlt.tsx'
-import VoiceActivatedSearchAltAlt from './components/VoiceActivatedSearchAltAlt.tsx'
+import VoiceActivatedSearch from './components/VoiceActivatedSearch.tsx'
 
 function App() {
   return (
-    <VoiceActivatedSearchAltAlt />
+    <VoiceActivatedSearch />
   )
 }
 
