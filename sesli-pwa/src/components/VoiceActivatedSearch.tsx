@@ -13,52 +13,55 @@ const VoiceActivatedSearch: React.FC = () => {
     const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [currentResultIndex, setCurrentResultIndex] = useState(0);
-    const [isReadingResults, setIsReadingResults] = useState(false);
     const [isReadingDetails, setIsReadingDetails] = useState(false);
-    const [isListeningEnabled, setIsListeningEnabled] = useState(false);
     const [microphonePermission, setMicrophonePermission] = useState<boolean | null>(null);
     const isSpeakingRef = useRef(false);
-
-    const requestMicrophoneAccess = () => {
-        requestMediaPermissions()
-            .then(() => {
-                setMicrophonePermission(true);
-                setIsListeningEnabled(true);
-            })
-            .catch((err: MediaPermissionsError) => {
-                setMicrophonePermission(false);
-                const { type, message } = err;
-                let customMessage: string;
-                switch (type) {
-                    case MediaPermissionsErrorType.SystemPermissionDenied:
-                        customMessage = `Your system has not granted microphone access. Message: ${message}`;
-                        break;
-                    case MediaPermissionsErrorType.UserPermissionDenied:
-                        customMessage = `You denied the permission to use the microphone. Message: ${message}`;
-                        break;
-                    case MediaPermissionsErrorType.CouldNotStartVideoSource:
-                        customMessage = `Another application is using the microphone. ${message}`;
-                        break;
-                    default:
-                        customMessage = `Failed to access the microphone. ${message}`;
-                }
-                setErrorMessage(customMessage);
-            });
-    };
+    const [isCapturingQuery, setIsCapturingQuery] = useState(false);
+    const [isListening, setIsListening] = useState(false);
 
     const {
         transcript,
-        listening,
         resetTranscript,
         browserSupportsSpeechRecognition
-    } = useSpeechRecognition({
-        commands: [
-            {
-                command: 'reset',
-                callback: () => resetTranscript()
+    } = useSpeechRecognition();
+
+    const checkMicrophonePermission = useCallback(async () => {
+        try {
+            await navigator.mediaDevices.getUserMedia({ audio: true });
+            setMicrophonePermission(true);
+        } catch (err) {
+            setMicrophonePermission(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        checkMicrophonePermission();
+    }, [checkMicrophonePermission]);
+
+    const requestMicrophoneAccess = async () => {
+        try {
+            await requestMediaPermissions();
+            setMicrophonePermission(true);
+        } catch (err: unknown) {
+            const error = err as MediaPermissionsError;
+            setMicrophonePermission(false);
+            let customMessage: string;
+            switch (error.type) {
+                case MediaPermissionsErrorType.SystemPermissionDenied:
+                    customMessage = `Sistem mikrofon erişimine izin vermedi. Mesaj: ${error.message}`;
+                    break;
+                case MediaPermissionsErrorType.UserPermissionDenied:
+                    customMessage = `Mikrofon kullanma izni reddedildi. Mesaj: ${error.message}`;
+                    break;
+                case MediaPermissionsErrorType.CouldNotStartVideoSource:
+                    customMessage = `Başka bir uygulama mikrofonu kullanıyor. ${error.message}`;
+                    break;
+                default:
+                    customMessage = `Mikrofona erişilemedi. ${error.message}`;
             }
-        ]
-    });
+            setErrorMessage(customMessage);
+        }
+    };
 
     const performSearch = useCallback((query: string) => {
         console.log('Performing search for:', query);
@@ -66,30 +69,32 @@ const VoiceActivatedSearch: React.FC = () => {
         setSearchResults(results);
         setSearchQuery(query);
         setCurrentResultIndex(0);
-        setIsReadingResults(true);
-        if (results.length > 0) {
-            speakResultTitle(results[0]);
-        } else {
-            speakText('Sonuç bulunamadı. Lütfen başka bir arama yapın.');
-        }
+        
+        speakText(`${results.length} sonuç bulundu. İlk sonucu okuyorum.`, () => {
+            if (results.length > 0) {
+                speakResultTitle(results[0]);
+            } else {
+                speakText('Sonuç bulunamadı. Lütfen başka bir arama yapın.');
+            }
+        });
     }, []);
 
     const speakText = (text: string, onEndCallback?: () => void) => {
         isSpeakingRef.current = true;
-        stopListening();
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = "tr-TR";
         utterance.onend = () => {
             isSpeakingRef.current = false;
             if (onEndCallback) onEndCallback();
-            if (isListeningEnabled) startListening();  // Ensure listening resumes if needed
         };
         window.speechSynthesis.speak(utterance);
     };
 
     const speakResultTitle = (result: SearchResult) => {
         setSelectedResult(result);
-        speakText(`${result.title}. Daha fazla bilgi ister misiniz?`);
+        speakText(`${result.title}. Daha fazla bilgi ister misiniz?`, () => {
+            startListening();
+        });
     };
 
     const speakResultContent = (result: SearchResult) => {
@@ -116,7 +121,7 @@ const VoiceActivatedSearch: React.FC = () => {
         } else {
             if (command.includes('diğer') || command.includes('sonraki')) {
                 moveToNextResult();
-            } else if (command.includes('temizle') || command.includes('yeni arama')) {
+            } else if (command.includes('temizle') || command.includes('kapat')) {
                 clearSearch();
             } else {
                 speakText('Anlaşılamadı. Lütfen diğer sonuca geçmek için "diğer" veya aramayı temizlemek için "temizle" deyin.');
@@ -139,42 +144,45 @@ const VoiceActivatedSearch: React.FC = () => {
         setSearchResults([]);
         setSelectedResult(null);
         setCurrentResultIndex(0);
-        setIsReadingResults(false);
         setIsReadingDetails(false);
-        speakText('Arama temizlendi. Yeni bir arama yapmaya hazır olduğunuzda butona tıklayın.');
+        speakText('Arama temizlendi. Yeni bir arama yapmaya hazırsınız.');
+        setIsListening(false);
+        SpeechRecognition.stopListening();
     };
 
     useEffect(() => {
         if (transcript && !isSpeakingRef.current) {
-            if (isReadingResults) {
-                handleVoiceCommand(transcript.toLowerCase());
-            } else {
-                setSearchQuery(transcript);
+            if (isCapturingQuery) {
+                setIsCapturingQuery(false);
+                setIsListening(false);
                 performSearch(transcript);
+                SpeechRecognition.stopListening();
+            } else {
+                handleVoiceCommand(transcript.toLowerCase());
             }
             resetTranscript();
         }
-    }, [transcript, searchResults, currentResultIndex, performSearch, isReadingResults]);
+    }, [transcript, isCapturingQuery, performSearch]);
 
     const startListening = () => {
-        if (!isListeningEnabled) return;
-        SpeechRecognition.startListening({ language: 'tr-TR' }).catch((error: any) => {
-            console.error('Speech recognition error:', error);
-            setErrorMessage(`Ses tanıma başlatılırken hata oluştu: ${error.message}`);
-        });
-    };
-
-    const stopListening = () => {
-        SpeechRecognition.stopListening().catch((error: any) => {
-            console.error('Error stopping speech recognition:', error);
-            setErrorMessage(`Ses tanıma durdurulurken hata oluştu: ${error.message}`);
-        });
+        if (microphonePermission) {
+            setIsListening(true);
+            SpeechRecognition.startListening({ language: 'tr-TR' }).catch((error: any) => {
+                console.error('Speech recognition error:', error);
+                setErrorMessage(`Ses tanıma başlatılırken hata oluştu: ${error.message}`);
+                setIsListening(false);
+            });
+        } else {
+            requestMicrophoneAccess();
+        }
     };
 
     const toggleListening = () => {
-        if (listening) {
-            stopListening();
-        } else if (microphonePermission) {
+        if (isListening) {
+            setIsListening(false);
+            SpeechRecognition.stopListening();
+        } else {
+            setIsCapturingQuery(true);
             startListening();
         }
     };
@@ -183,29 +191,16 @@ const VoiceActivatedSearch: React.FC = () => {
         return <span>Tarayıcınız ses tanımayı desteklemiyor.</span>;
     }
 
-    if (microphonePermission === false) {
-        return <div>Microphone access is needed: {errorMessage}</div>;
-    }
-
     return (
         <div className="p-4">
             <h1 className="text-2xl font-bold mb-4">Sesli Arama Uygulaması</h1>
-            {!microphonePermission && (
-                <button
-                    onClick={requestMicrophoneAccess}
-                    className="bg-yellow-500 hover:bg-yellow-700 text-white font-bold py-2 px-4 rounded mb-4"
-                >
-                    Mikrofon İzni Ver
-                </button>
-            )}
             <div className="flex items-center mb-4">
                 <button
                     onClick={toggleListening}
-                    className={`bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded mr-2 flex items-center ${!isListeningEnabled && 'opacity-50 cursor-not-allowed'}`}
-                    disabled={!isListeningEnabled}
+                    className={`${isListening ? 'bg-red-500 hover:bg-red-700' : 'bg-blue-500 hover:bg-blue-700'} text-white font-bold p-2 rounded-full mr-2`}
+                    aria-label={isListening ? 'Dinlemeyi Durdur' : 'Sesli Aramayı Başlat'}
                 >
-                    {listening ? <Mic className="mr-2" /> : <MicOff className="mr-2" />}
-                    {listening ? 'Dinlemeyi Durdur' : 'Sesli Aramayı Başlat'}
+                    {isListening ? <MicOff size={24} /> : <Mic size={24} />}
                 </button>
                 <input
                     type="text"
@@ -225,6 +220,12 @@ const VoiceActivatedSearch: React.FC = () => {
                 <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
                     <strong className="font-bold">Hata: </strong>
                     <span className="block sm:inline">{errorMessage}</span>
+                </div>
+            )}
+            {isListening && (
+                <div className="bg-blue-100 border border-blue-400 text-blue-700 px-4 py-3 rounded relative mb-4">
+                    <strong className="font-bold">Dinleniyor: </strong>
+                    <span className="block sm:inline">Lütfen arama sorgunuzu söyleyin.</span>
                 </div>
             )}
             {transcript && (
